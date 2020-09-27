@@ -30,11 +30,23 @@ dbt_file_source::dbt_file_source(
 		int fd = open(path.c_str(), O_RDONLY);
 		size = lseek(fd, 0, SEEK_END);
 
-		#ifdef __linux__
-		mmap(data, size, PROT_READ|PROT_WRITE, MAP_FILE|MAP_PRIVATE|MAP_POPULATE, fd, 0);
-		#else
-		mmap(data, size, PROT_READ|PROT_WRITE, MAP_FILE|MAP_PRIVATE, fd, 0);
-	        #endif
+#ifdef __linux__
+		data = static_cast<char*>(mmap(NULL, size, PROT_READ|PROT_WRITE,
+					     MAP_FILE|MAP_PRIVATE|MAP_POPULATE, fd, 0));
+#else
+		data = static_cast<char*>(mmap(NULL, size, PROT_READ|PROT_WRITE,
+					       MAP_FILE|MAP_PRIVATE, fd, 0));
+		// Touch every page once on systems that don't support pre-populating
+		// to ascertain (on a best-effort basis) that data are in memory
+		// (if MLOCKALL is enabled, the best-effort turns into a guarantee)
+		long psize = sysconf(_SC_PAGESIZE);
+                size_t num_pages = size/psize + (size % psize == 0 ? 0 : 1);
+
+                volatile char c;
+                const char *ptr = (*source_stream)->data();
+                for (size_t i = 0; i < num_pages; i++)
+			c = *(ptr + i * psize);
+#endif
 		if (!data) {
 			std::cerr << "Internal error: mmap of existing file failed" << std::endl;
 			exit(-1);
